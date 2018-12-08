@@ -19,7 +19,6 @@ logger = create_logger()
 from .errors import Error
 from .fs import get_keys_dir
 from .time import OutputTimestamp, format_time, to_localtime, safe_timestamp, safe_s
-from .usergroup import uid2user
 from .. import __version__ as borg_version
 from .. import __version_tuple__ as borg_version_tuple
 from ..constants import *  # NOQA
@@ -179,7 +178,7 @@ def format_line(format, data):
 
 def replace_placeholders(text):
     """Replace placeholders in text with their values."""
-    from ..platform import fqdn, hostname
+    from ..platform import fqdn, hostname, getosusername
     current_time = datetime.now(timezone.utc)
     data = {
         'pid': os.getpid(),
@@ -188,7 +187,7 @@ def replace_placeholders(text):
         'hostname': hostname,
         'now': DatetimeWrapper(current_time.astimezone(None)),
         'utcnow': DatetimeWrapper(current_time),
-        'user': uid2user(os.getuid(), os.getuid()),
+        'user': getosusername(),
         'uuid4': str(uuid.uuid4()),
         'borgversion': borg_version,
         'borgmajor': '%d' % borg_version_tuple[:1],
@@ -349,11 +348,11 @@ class Location:
         """ + optional_archive_re, re.VERBOSE)              # archive name (optional, may be empty)
 
     def __init__(self, text=''):
-        self.orig = text
-        if not self.parse(self.orig):
-            raise ValueError('Location: parse failed: %s' % self.orig)
+        if not self.parse(text):
+            raise ValueError('Invalid location format: "%s"' % self.orig)
 
     def parse(self, text):
+        self.orig = text
         text = replace_placeholders(text)
         valid = self._parse(text)
         if valid:
@@ -365,10 +364,9 @@ class Location:
         if repo is None:
             return False
         valid = self._parse(repo)
-        if not valid:
-            return False
         self.archive = m.group('archive')
-        return True
+        self.orig = repo if not self.archive else '%s::%s' % (repo, self.archive)
+        return valid
 
     def _parse(self, text):
         def normpath_special(p):
@@ -453,8 +451,8 @@ def location_validator(archive=None, proto=None):
     def validator(text):
         try:
             loc = Location(text)
-        except ValueError:
-            raise argparse.ArgumentTypeError('Invalid location format: "%s"' % text) from None
+        except ValueError as err:
+            raise argparse.ArgumentTypeError(str(err)) from None
         if archive is True and not loc.archive:
             raise argparse.ArgumentTypeError('"%s": No archive specified' % text)
         elif archive is False and loc.archive:
@@ -517,10 +515,13 @@ class ArchiveFormatter(BaseFormatter):
         'time': 'alias of "start"',
         'end': 'time (end) of creation of the archive',
         'id': 'internal ID of the archive',
+        'hostname': 'hostname of host on which this archive was created',
+        'username': 'username of user who created this archive',
     }
     KEY_GROUPS = (
         ('archive', 'name', 'barchive', 'comment', 'bcomment', 'id'),
         ('start', 'time', 'end'),
+        ('hostname', 'username'),
     )
 
     @classmethod
@@ -564,8 +565,10 @@ class ArchiveFormatter(BaseFormatter):
         self.format = partial_format(format, static_keys)
         self.format_keys = {f[1] for f in Formatter().parse(format)}
         self.call_keys = {
-            'comment': partial(self.get_comment, rs=True),
-            'bcomment': partial(self.get_comment, rs=False),
+            'hostname': partial(self.get_meta, 'hostname', rs=True),
+            'username': partial(self.get_meta, 'username', rs=True),
+            'comment': partial(self.get_meta, 'comment', rs=True),
+            'bcomment': partial(self.get_meta, 'comment', rs=False),
             'end': self.get_ts_end,
         }
         self.used_call_keys = set(self.call_keys) & self.format_keys
@@ -603,8 +606,9 @@ class ArchiveFormatter(BaseFormatter):
             self._archive = Archive(self.repository, self.key, self.manifest, self.name)
         return self._archive
 
-    def get_comment(self, rs):
-        return remove_surrogates(self.archive.comment) if rs else self.archive.comment
+    def get_meta(self, key, rs):
+        value = self.archive.metadata.get(key, '')
+        return remove_surrogates(value) if rs else value
 
     def get_ts_end(self):
         return self.format_time(self.archive.ts_end)
