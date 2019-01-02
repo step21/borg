@@ -44,8 +44,8 @@ on_rtd = os.environ.get('READTHEDOCS')
 install_requires = [
     # we are rather picky about msgpack versions, because a good working msgpack is
     # very important for borg, see https://github.com/borgbackup/borg/issues/3753
-    # as of now, 0.5.6 is the only preferred version of msgpack:
-    'msgpack==0.5.6',
+    # as of now, 0.5.6 and 0.6.0 are the only preferred versions of msgpack:
+    'msgpack >=0.5.6, !=0.5.7, !=0.5.8, !=0.5.9, <=0.6.0',
     # if you can't satisfy the above requirement, these are versions that might
     # also work ok, IF you make sure to use the COMPILED version of msgpack-python,
     # NOT the PURE PYTHON fallback implementation: ==0.5.1, ==0.5.4
@@ -248,9 +248,15 @@ if not on_rtd:
                   and '--help' not in sys.argv[1:]
 
     if cythonize and cythonizing:
-        # compile .pyx extensions to .c in parallel
-        cythonize([posix_ext, linux_ext, freebsd_ext, darwin_ext], nthreads=cpu_threads+1)
-        ext_modules = cythonize(ext_modules, nthreads=cpu_threads+1)
+        cython_opts = dict(
+            # compile .pyx extensions to .c in parallel
+            nthreads=cpu_threads + 1,
+            # default language_level will be '3str' starting from Cython 3.0.0,
+            # but old cython versions (< 0.29) do not know that, thus we use 3 for now.
+            compiler_directives={'language_level': 3},
+        )
+        cythonize([posix_ext, linux_ext, freebsd_ext, darwin_ext], **cython_opts)
+        ext_modules = cythonize(ext_modules, **cython_opts)
 
 setup(
     name='borgbackup',
@@ -276,6 +282,7 @@ setup(
         'Operating System :: POSIX :: Linux',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Topic :: Security :: Cryptography',
@@ -302,5 +309,5 @@ setup(
     setup_requires=['setuptools_scm>=1.7'],
     install_requires=install_requires,
     extras_require=extras_require,
-    python_requires='>=3.6',
+    python_requires='>=3.5',
 )
