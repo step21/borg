@@ -13,7 +13,7 @@ from .xattr import _listxattr_inner, _getxattr_inner, _setxattr_inner, split_str
 from libc cimport errno
 from libc.stdint cimport int64_t
 
-API_VERSION = '1.2_02'
+API_VERSION = '1.2_05'
 
 cdef extern from "sys/xattr.h":
     ssize_t c_listxattr "listxattr" (const char *path, char *list, size_t size)
@@ -233,10 +233,11 @@ def acl_get(path, item, st, numeric_owner=False, fd=None):
     cdef char *default_text = NULL
     cdef char *access_text = NULL
 
-    if fd is None and isinstance(path, str):
-        path = os.fsencode(path)
     if stat.S_ISLNK(st.st_mode):
+        # symlinks can not have ACLs
         return
+    if isinstance(path, str):
+        path = os.fsencode(path)
     if (fd is not None and acl_extended_fd(fd) <= 0
         or
         fd is None and acl_extended_file(path) <= 0):
@@ -247,12 +248,11 @@ def acl_get(path, item, st, numeric_owner=False, fd=None):
         converter = acl_append_numeric_ids
     try:
         if fd is not None:
-            # we only have a fd for FILES (not other fs objects), so we can get the access_acl:
-            assert stat.S_ISREG(st.st_mode)
             access_acl = acl_get_fd(fd)
         else:
-            # if we have no fd, it can be anything
             access_acl = acl_get_file(path, ACL_TYPE_ACCESS)
+        if stat.S_ISDIR(st.st_mode):
+            # only directories can have a default ACL. there is no fd-based api to get it.
             default_acl = acl_get_file(path, ACL_TYPE_DEFAULT)
         if access_acl:
             access_text = acl_to_text(access_acl, NULL)
@@ -299,11 +299,8 @@ def acl_set(path, item, numeric_owner=False, fd=None):
         try:
             default_acl = acl_from_text(<bytes>converter(default_text))
             if default_acl:
-                # default acls apply only to directories
-                if False and fd is not None:  # Linux API seems to not support this
-                    acl_set_fd(fd, default_acl)
-                else:
-                    acl_set_file(path, ACL_TYPE_DEFAULT, default_acl)
+                # only directories can get a default ACL. there is no fd-based api to set it.
+                acl_set_file(path, ACL_TYPE_DEFAULT, default_acl)
         finally:
             acl_free(default_acl)
 
@@ -315,39 +312,60 @@ cdef _sync_file_range(fd, offset, length, flags):
         raise OSError(errno.errno, os.strerror(errno.errno))
     safe_fadvise(fd, offset, length, 'DONTNEED')
 
+
 cdef unsigned PAGE_MASK = sysconf(_SC_PAGESIZE) - 1
 
 
-class SyncFile(BaseSyncFile):
-    """
-    Implemented using sync_file_range for asynchronous write-out and fdatasync for actual durability.
+def _is_WSL():
+    """detect Windows Subsystem for Linux"""
+    try:
+        with open('/proc/version') as fd:
+            linux_version = fd.read()
+        # hopefully no non-WSL Linux will ever mention 'Microsoft' in the kernel version:
+        return 'Microsoft' in linux_version
+    except:  # noqa
+        # make sure to never ever crash due to this check.
+        return False
 
-    "write-out" means that dirty pages (= data that was written) are submitted to an I/O queue and will be send to
-    disk in the immediate future.
-    """
 
-    def __init__(self, path, binary=False):
-        super().__init__(path, binary)
-        self.offset = 0
-        self.write_window = (16 * 1024 ** 2) & ~PAGE_MASK
-        self.last_sync = 0
-        self.pending_sync = None
+if _is_WSL():
+    class SyncFile(BaseSyncFile):
+        # if we are on Microsoft's "Windows Subsytem for Linux", use the
+        # more generic BaseSyncFile to avoid issues like seen there:
+        # https://github.com/borgbackup/borg/issues/1961
+        pass
+else:
+    # a real Linux, so we can do better. :)
+    class SyncFile(BaseSyncFile):
+        """
+        Implemented using sync_file_range for asynchronous write-out and fdatasync for actual durability.
 
-    def write(self, data):
-        self.offset += self.fd.write(data)
-        offset = self.offset & ~PAGE_MASK
-        if offset >= self.last_sync + self.write_window:
+        "write-out" means that dirty pages (= data that was written) are submitted to an I/O queue and will be send to
+        disk in the immediate future.
+        """
+
+        def __init__(self, path, binary=False):
+            super().__init__(path, binary)
+            self.offset = 0
+            self.write_window = (16 * 1024 ** 2) & ~PAGE_MASK
+            self.last_sync = 0
+            self.pending_sync = None
+
+        def write(self, data):
+            self.offset += self.fd.write(data)
+            offset = self.offset & ~PAGE_MASK
+            if offset >= self.last_sync + self.write_window:
+                self.fd.flush()
+                _sync_file_range(self.fileno, self.last_sync, offset - self.last_sync, SYNC_FILE_RANGE_WRITE)
+                if self.pending_sync is not None:
+                    _sync_file_range(self.fileno, self.pending_sync, self.last_sync - self.pending_sync,
+                                     SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WAIT_AFTER)
+                self.pending_sync = self.last_sync
+                self.last_sync = offset
+
+        def sync(self):
             self.fd.flush()
-            _sync_file_range(self.fileno, self.last_sync, offset - self.last_sync, SYNC_FILE_RANGE_WRITE)
-            if self.pending_sync is not None:
-                _sync_file_range(self.fileno, self.pending_sync, self.last_sync - self.pending_sync,
-                                 SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WAIT_AFTER)
-            self.pending_sync = self.last_sync
-            self.last_sync = offset
-
-    def sync(self):
-        self.fd.flush()
-        os.fdatasync(self.fileno)
-        # tell the OS that it does not need to cache what we just wrote,
-        # avoids spoiling the cache for the OS and other processes.
-        safe_fadvise(self.fileno, 0, 0, 'DONTNEED')
+            os.fdatasync(self.fileno)
+            # tell the OS that it does not need to cache what we just wrote,
+            # avoids spoiling the cache for the OS and other processes.
+            safe_fadvise(self.fileno, 0, 0, 'DONTNEED')

@@ -19,7 +19,7 @@ from .helpers import get_cache_dir, get_security_dir
 from .helpers import int_to_bigint, bigint_to_int, bin_to_hex, parse_stringified_list
 from .helpers import format_file_size
 from .helpers import safe_ns
-from .helpers import yes, hostname_is_unique
+from .helpers import yes
 from .helpers import remove_surrogates
 from .helpers import ProgressIndicatorPercent, ProgressIndicatorMessage
 from .helpers import set_ec, EXIT_WARNING
@@ -256,13 +256,13 @@ class CacheConfig:
             config.write(fd)
 
     def open(self):
-        self.lock = Lock(os.path.join(self.path, 'lock'), exclusive=True, timeout=self.lock_wait,
-                         kill_stale_locks=hostname_is_unique()).acquire()
+        self.lock = Lock(os.path.join(self.path, 'lock'), exclusive=True, timeout=self.lock_wait).acquire()
         self.load()
 
     def load(self):
         self._config = configparser.ConfigParser(interpolation=None)
-        self._config.read(self.config_path)
+        with open(self.config_path) as fd:
+            self._config.read_file(fd)
         self._check_upgrade(self.config_path)
         self.id = self._config.get('cache', 'repository')
         self.manifest_id = unhexlify(self._config.get('cache', 'manifest'))
@@ -902,11 +902,11 @@ class LocalCache(CacheStatsMixin):
                             id, stored_size, size))
         return refcount
 
-    def chunk_incref(self, id, stats, size=None):
+    def chunk_incref(self, id, stats, size=None, part=False):
         if not self.txn_active:
             self.begin_txn()
         count, _size, csize = self.chunks.incref(id)
-        stats.update(_size, csize, False)
+        stats.update(_size, csize, False, part=part)
         return ChunkListEntry(id, _size, csize)
 
     def chunk_decref(self, id, stats, wait=True):
@@ -1046,7 +1046,7 @@ Chunk index:    {0.total_unique_chunks:20d}             unknown"""
             self.chunks[id] = entry._replace(size=size)
         return entry.refcount
 
-    def chunk_incref(self, id, stats, size=None):
+    def chunk_incref(self, id, stats, size=None, part=False):
         if not self._txn_active:
             self.begin_txn()
         count, _size, csize = self.chunks.incref(id)
@@ -1054,7 +1054,7 @@ Chunk index:    {0.total_unique_chunks:20d}             unknown"""
         # size or add_chunk); we can't add references to those (size=0 is invalid) and generally don't try to.
         size = _size or size
         assert size
-        stats.update(size, csize, False)
+        stats.update(size, csize, False, part=part)
         return ChunkListEntry(id, size, csize)
 
     def chunk_decref(self, id, stats, wait=True):

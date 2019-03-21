@@ -4,12 +4,12 @@
 #
 # To Install:
 #
-# Copy this file to /usr/share/zsh/site-functions/
+# Copy this file to /usr/[local]/share/zsh/site-functions/
 #
 # -------
 # borgbackup ZSH completion
 # Kevin Gravier 2017 <kevin@mrkmg.com>
-# 
+#
 # The MIT License (MIT)
 
 # Copyright (c) 2017 Kevin
@@ -55,9 +55,10 @@ _borg() {
                              --remote-path'[set remote path to executable (default: "borg")]:_files'
                              --remote-ratelimit'[set remote network upload rate limit in kiByte/s (default: 0=unlimited)]:RATE'
                              --consider-part-files'[treat part files like normal files (e.g. to list/extract them)]'
-                             --debug-profile'[Write execution profile in Borg format into FILE.]:_files')
+                             --debug-profile'[write execution profile in Borg format into FILE.]:_files'
+                             --rsh'[use COMMAND instead of ssh]:COMMAND')
 
-    borg_possible_commands=(init create extract check rename list diff delete prune info mount umount key upgrade recreate export-tar serve config with-lock break-lock benchmark)
+    borg_possible_commands=(init create extract check rename list diff delete prune compact info mount umount key upgrade recreate export-tar serve config with-lock break-lock benchmark help)
     borg_possible_key_commands=(change-passphrase import export)
     command=""
     keyCommand=""
@@ -71,9 +72,10 @@ _borg() {
         (init)
             _arguments \
                 '2:repo:_files'\
-                {-e,--encryption}'[select encryption key mode]:MODE'\
+                {-e,--encryption}'[select encryption key mode]:mode:(none keyfile keyfile-blake2 repokey repokey-blake2 authenticated authenticated-blake2)'\
                 --append-only'[only allow appending to repository segment files]'\
                 --storage-quota'[Override storage quota of the repository]:QUOTA'\
+                --make-parent-dirs'[create parent directories]'\
                 $borg_common_options
             ;;
         (create)
@@ -93,14 +95,13 @@ _borg() {
                 --patterns-from'[experimental: read include/exclude patterns from PATTERNFILE, one per line]:_files'\
                 --exclude-caches'[exclude directories that contain a CACHEDIR.TAG file ]'\
                 --exclude-if-present'[exclude directories that are tagged by containing a filesystem object with the given NAME]:NAME'\
-                {--keep-exclude-tags,--keep-tag-files}'[if tag objects are specified with --exclude-if-present, don’t omit the tag objects themselves]'\
+                --keep-exclude-tags'[if tag objects are specified with --exclude-if-present, don’t omit the tag objects themselves]'\
                 {-x,--one-file-system}'[stay in the same file system ]'\
                 --numeric-owner'[only store numeric user and group identifiers]'\
                 --noatime'[do not store atime into archive]'\
                 --nobirthtime'[do not store birthtime (creation date) into archive]'\
                 --nobsdflags'[do not read and store bsdflags (e.g. NODUMP, IMMUTABLE) into archive]'\
-                --ignore-inode'[ignore inode data in the file metadata cache used to detect unchanged files.]'\
-                --files-cache'[operate files cache in MODE. default: ctime,size,inode]:MODE'\
+                --files-cache'[operate files cache in MODE. default: ctime,size,inode]:mode:(ctime,size,inode mtime,size,inode ctime,size mtime,size rechunk,ctime rechunk,mtime disabled)'\
                 --read-special'[open and read block and char device files as well as FIFOs as if they were regular files.]'\
                 --comment'[add a comment text to the archive]:COMMENT'\
                 --timestamp'[manually specify the archive creation date/time]:TIMESTAMP'\
@@ -135,9 +136,10 @@ _borg() {
                 --verify-data'[perform cryptographic archive data integrity verification]'\
                 --repair'[attempt to repair any inconsistencies found]'\
                 --save-space'[work slower, but using less space]'\
+                --max-duration'[partial repo check for max. SECONDS]:SECONDS'\
                 {-P,--prefix}'[only consider archive names starting with this prefix.]:PREFIX'\
                 {-a,--glob-archives}'[only consider archive names matching the glob]:GLOB'\
-                --sort-by'[Comma-separated list of sorting keys]:KEYS'\
+                --sort-by'[Comma-separated list of sorting keys]:keys:(timestamp name id)'\
                 --first'[consider first N archives after other filters were applied]:N'\
                 --last'[consider last N archives after other filters were applied]:N'\
                 $borg_common_options
@@ -153,12 +155,12 @@ _borg() {
                 '2:archives:__borg_archive'\
                 '*:path:_files'\
                 --short'[only print file/directory names, nothing else]'\
-                {--format,--list-format}'[specify format for file listing]:FORMAT'\
+                --format'[specify format for file listing]:FORMAT'\
                 --json'[Only valid for listing repository contents. Format output as JSON.]'\
                 --json-lines'[Only valid for listing archive contents. Format output as JSON Lines. ]'\
                 {-P,--prefix}'[only consider archive names starting with this prefix.]:PREFIX'\
                 {-a,--glob-archives}'[only consider archive names matching the glob]:GLOB'\
-                --sort-by'[Comma-separated list of sorting keys]:KEYS'\
+                --sort-by'[Comma-separated list of sorting keys]:keys:(timestamp name id)'\
                 --first'[consider first N archives after other filters were applied]:N'\
                 --last'[consider last N archives after other filters were applied]:N'\
                 {-e,--exclude}'[exclude paths matching PATTERN]:PATTERN'\
@@ -170,7 +172,7 @@ _borg() {
         (diff)
             _arguments \
                 '2:archives:__borg_archive'\
-                '3:archives:__borg_archive'\
+                '3:archives:__borg_archive2'\
                 '*:path:_files'\
                 --numeric-owner'[only obey numeric user and group identifiers]'\
                 --same-chunker-params'[override check of chunker parameters.]'\
@@ -193,7 +195,7 @@ _borg() {
                 --save-space'[work slower, but using less space]'\
                 {-P,--prefix}'[only consider archive names starting with this prefix.]:PREFIX'\
                 {-a,--glob-archives}'[only consider archive names matching the glob]:GLOB'\
-                --sort-by'[Comma-separated list of sorting keys]:KEYS'\
+                --sort-by'[Comma-separated list of sorting keys]:keys:(timestamp name id)'\
                 --first'[consider first N archives after other filters were applied]:N'\
                 --last'[consider last N archives after other filters were applied]:N'\
                 $borg_common_options
@@ -218,13 +220,19 @@ _borg() {
                 {-a,--glob-archives}'[only consider archive names matching the glob]:GLOB'\
                 $borg_common_options
             ;;
+        (compact)
+            _arguments \
+                '2:archives:__borg_archive'\
+                --cleanup-commits'[cleanup commit-only 17-byte segment files]'\
+                $borg_common_options
+            ;;
         (info)
             _arguments \
                 '2:archives:__borg_archive'\
                 --json'[format output as JSON]'\
                 {-P,--prefix}'[only consider archive names starting with this prefix.]:PREFIX'\
                 {-a,--glob-archives}'[only consider archive names matching the glob]:GLOB'\
-                --sort-by'[Comma-separated list of sorting keys]:KEYS'\
+                --sort-by'[Comma-separated list of sorting keys]:keys:(timestamp name id)'\
                 --first'[consider first N archives after other filters were applied]:N'\
                 --last'[consider last N archives after other filters were applied]:N'\
                 $borg_common_options
@@ -234,10 +242,10 @@ _borg() {
                 '2:archives:__borg_archive'\
                 '3:mountpoint:_files'\
                 {-f,--foreground}'[stay in foreground, do not daemonize]'\
-                -o'[Extra mount options]:OPTS'\
+                -o'[Extra mount options]:options:(ac_attr_timeout= allow_damaged_files allow_other allow_root attr_timeout= auto auto_cache auto_unmount default_permissions entry_timeout= gid= group_id= kernel_cache max_read= negative_timeout= noauto noforget remember= remount rootmode= uid= umask= user user_id= versions)'\
                 {-P,--prefix}'[only consider archive names starting with this prefix.]:PREFIX'\
                 {-a,--glob-archives}'[only consider archive names matching the glob]:GLOB'\
-                --sort-by'[Comma-separated list of sorting keys]:KEYS'\
+                --sort-by'[Comma-separated list of sorting keys]:keys:(timestamp name id)'\
                 --first'[consider first N archives after other filters were applied]:N'\
                 --last'[consider last N archives after other filters were applied]:N'\
                 {-e,--exclude}'[exclude paths matching PATTERN]:PATTERN'\
@@ -308,13 +316,13 @@ _borg() {
                 --patterns-from'[experimental: read include/exclude patterns from PATTERNFILE, one per line]:_files'\
                 --exclude-caches'[exclude directories that contain a CACHEDIR.TAG file ]'\
                 --exclude-if-present'[exclude directories that are tagged by containing a filesystem object with the given NAME]:NAME'\
-                {--keep-exclude-tags,--keep-tag-files}'[if tag objects are specified with --exclude-if-present, don’t omit the tag objects themselves]'\
+                --keep-exclude-tags'[if tag objects are specified with --exclude-if-present, don’t omit the tag objects themselves]'\
                 --target'[create a new archive with the name ARCHIVE]:ARCHIVE'\
                 {-c,--checkpoint-interval}'[write checkpoint every SECONDS seconds]:SECONDS'\
                 --comment'[add a comment text to the archive]:COMMENT'\
                 --timestamp'[manually specify the archive creation date/time]:TIMESTAMP'\
                 {-C,--compression}'[select compression algorithm]:COMPRESSION'\
-                --recompress'[recompress data chunks according to --compression if if-different]:PARAMS'\
+                --recompress'[recompress data chunks according to --compression if if-different]:params:(if-different always)'\
                 --chunker-params'[pecify the chunker parameters]:PARAMS'\
                 $borg_common_options
             ;;
@@ -370,6 +378,11 @@ _borg() {
                 '4:path:_files'\
                 $borg_common_options
             ;;
+        (help)
+            _arguments \
+                '2:type:(patterns placeholders compression )'\
+                $borg_common_options
+            ;;
         *)
             commands=(
                 'init:initialize empty repository'
@@ -381,6 +394,7 @@ _borg() {
                 'diff:find differences in archive contents'
                 'delete:delete archive'
                 'prune:prune archives'
+                'compact:free repository space'
                 'info:show repository or archive information'
                 'mount:mount repository'
                 'umount:umount repository'
@@ -393,6 +407,7 @@ _borg() {
                 'with-lock:run user command with lock held'
                 'break-lock:break repository and cache locks'
                 'benchmark:benchmark command'
+                'help:miscellaneous help'
             )
 
             _describe 'values' commands
@@ -403,15 +418,26 @@ _borg() {
 }
 
 __borg_archive() {
+    __borg_list_archives 1
+}
+__borg_archive2() {
+    __borg_list_archives 2
+}
+
+__borg_list_archives() {
     local -a items
-    if (($+BORG_REPO)); then
-        items=("${(@f)$(borg list $cpath --short 2>/dev/null | sed "s#^#::#")}")
-    else
-        local cpath
-        cpath=$words[-1]
-        cpath=${cpath%::*}
-        items=("${(@f)$(borg list $cpath --short 2>/dev/null | sed "s#^#${cpath}::#")}")
+    local cpath
+    cpath=`expr match "${words}" "\(.*\)::"`
+    cpath=${cpath##* }
+    if (( $1 == 1 )); then
+        # To achieve "repository::archive" listing:
+        prefix_repo="${cpath}::"
     fi
+    if (( $1 == 2 )); then
+        # To achieve only "archive" listing:
+        prefix_repo=
+    fi
+    items=("${(@f)$(borg list --format=$prefix_repo\{archive\}\{NEWLINE\} $cpath 2>/dev/null)}")
     if [[ $items[1] == "" ]]; then
         _files -/
     else

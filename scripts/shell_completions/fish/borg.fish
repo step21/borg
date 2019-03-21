@@ -16,6 +16,7 @@ complete -c borg -f -n __fish_is_first_token -a 'list' -d 'List archive or repos
 complete -c borg -f -n __fish_is_first_token -a 'diff' -d 'Find differences between archives'
 complete -c borg -f -n __fish_is_first_token -a 'delete' -d 'Delete a repository or archive'
 complete -c borg -f -n __fish_is_first_token -a 'prune' -d 'Prune repository archives'
+complete -c borg -f -n __fish_is_first_token -a 'compact' -d 'Free repository space'
 complete -c borg -f -n __fish_is_first_token -a 'info' -d 'Show archive details'
 complete -c borg -f -n __fish_is_first_token -a 'mount' -d 'Mount archive or a repository'
 complete -c borg -f -n __fish_is_first_token -a 'umount' -d 'Un-mount the mounted archive'
@@ -50,6 +51,17 @@ end
 complete -c borg -f -n __fish_is_first_token -a 'benchmark' -d 'Benchmark borg operations'
 complete -c borg -f -n __fish_borg_seen_benchmark -a 'crud' -d 'Benchmark borg CRUD operations'
 
+function __fish_borg_seen_help
+    if __fish_seen_subcommand_from help
+        and not __fish_seen_subcommand_from patterns placeholders compression
+        return 0
+    end
+    return 1
+end
+complete -c borg -f -n __fish_is_first_token -a 'help' -d 'Miscellaneous Help'
+complete -c borg -f -n __fish_borg_seen_help -a 'patterns' -d 'Help for patterns'
+complete -c borg -f -n __fish_borg_seen_help -a 'placeholders' -d 'Help for placeholders'
+complete -c borg -f -n __fish_borg_seen_help -a 'compression' -d 'Help for compression'
 
 # Common options
 complete -c borg -f -s h -l 'help'                  -d 'Show help information'
@@ -71,12 +83,14 @@ complete -c borg         -l 'remote-path'           -d 'Use PATH as remote borg 
 complete -c borg -f      -l 'remote-ratelimit'      -d 'Set remote network upload RATE limit'
 complete -c borg -f      -l 'consider-part-files'   -d 'Treat part files like normal files'
 complete -c borg         -l 'debug-profile'         -d 'Write execution profile into FILE'
+complete -c borg         -l 'rsh'                   -d 'Use COMMAND instead of ssh'
 
 # borg init options
 set -l encryption_modes "none keyfile keyfile-blake2 repokey repokey-blake2 authenticated authenticated-blake2"
 complete -c borg -f -s e -l 'encryption'            -d 'Encryption key MODE' -a "$encryption_modes" -n "__fish_seen_subcommand_from init"
 complete -c borg -f      -l 'append-only'           -d 'Create an append-only mode repository'      -n "__fish_seen_subcommand_from init"
 complete -c borg -f      -l 'storage-quota'         -d 'Set storage QUOTA of the repository'        -n "__fish_seen_subcommand_from init"
+complete -c borg -f      -l 'make-parent-dirs'      -d 'Create parent directories'                  -n "__fish_seen_subcommand_from init"
 
 # borg create options
 complete -c borg -f -s n -l 'dry-run'               -d 'Do not change the repository'               -n "__fish_seen_subcommand_from create"
@@ -103,7 +117,6 @@ complete -c borg -f      -l 'noatime'               -d 'Do not store atime'     
 complete -c borg -f      -l 'noctime'               -d 'Do not store ctime'                         -n "__fish_seen_subcommand_from create"
 complete -c borg -f      -l 'nobirthtime'           -d 'Do not store creation date'                 -n "__fish_seen_subcommand_from create"
 complete -c borg -f      -l 'nobsdflags'            -d 'Do not store bsdflags'                      -n "__fish_seen_subcommand_from create"
-complete -c borg -f      -l 'ignore-inode'          -d 'Ignore inode data in file metadata cache'   -n "__fish_seen_subcommand_from create"
 set -l files_cache_mode "ctime,size,inode mtime,size,inode ctime,size mtime,size rechunk,ctime rechunk,mtime disabled"
 complete -c borg -f      -l 'files-cache'           -d 'Operate files cache in MODE' -a "$files_cache_mode" -n "__fish_seen_subcommand_from create"
 complete -c borg -f      -l 'read-special'          -d 'Open device files like regular files'       -n "__fish_seen_subcommand_from create"
@@ -136,6 +149,7 @@ complete -c borg -f      -l 'archives-only'         -d 'Only perform archives ch
 complete -c borg -f      -l 'verify-data'           -d 'Cryptographic integrity verification'       -n "__fish_seen_subcommand_from check"
 complete -c borg -f      -l 'repair'                -d 'Attempt to repair found inconsistencies'    -n "__fish_seen_subcommand_from check"
 complete -c borg -f      -l 'save-space'            -d 'Work slower but using less space'           -n "__fish_seen_subcommand_from check"
+complete -c borg -f      -l 'max-duration'          -d 'Partial repo check for max. SECONDS'        -n "__fish_seen_subcommand_from check"
 # Archive filters
 complete -c borg -f -s P -l 'prefix'                -d 'Only archive names starting with PREFIX'    -n "__fish_seen_subcommand_from check"
 complete -c borg -f -s a -l 'glob-archives'         -d 'Only archive names matching GLOB'           -n "__fish_seen_subcommand_from check"
@@ -149,7 +163,6 @@ complete -c borg -f      -l 'last'                  -d 'Only last N archives'   
 
 # borg list options
 complete -c borg -f      -l 'short'                 -d 'Only print file/directory names'            -n "__fish_seen_subcommand_from list"
-complete -c borg -f      -l 'list-format'           -d 'Specify FORMAT for file listing'            -n "__fish_seen_subcommand_from list"
 complete -c borg -f      -l 'format'                -d 'Specify FORMAT for file listing'            -n "__fish_seen_subcommand_from list"
 complete -c borg -f      -l 'json'                  -d 'List contents in json format'               -n "__fish_seen_subcommand_from list"
 complete -c borg -f      -l 'json-lines'            -d 'List contents in json lines format'         -n "__fish_seen_subcommand_from list"
@@ -207,6 +220,9 @@ complete -c borg -f      -l 'save-space'            -d 'Work slower but using le
 complete -c borg -f -s P -l 'prefix'                -d 'Only archive names starting with PREFIX'    -n "__fish_seen_subcommand_from prune"
 complete -c borg -f -s a -l 'glob-archives'         -d 'Only archive names matching GLOB'           -n "__fish_seen_subcommand_from prune"
 
+# borg compact options
+complete -c borg -f -s n -l 'cleanup-commits'       -d 'Cleanup commit-only segment files'          -n "__fish_seen_subcommand_from compact"
+
 # borg info options
 complete -c borg -f      -l 'json'                  -d 'Format output in json format'               -n "__fish_seen_subcommand_from info"
 # Archive filters
@@ -218,8 +234,8 @@ complete -c borg -f      -l 'last'                  -d 'Only last N archives'   
 
 # borg mount options
 complete -c borg -f -s f -l 'foreground'            -d 'Stay in foreground, do not daemonize'       -n "__fish_seen_subcommand_from mount"
-# FIXME there are lot more options, but not all are applicable:
-set -l fuse_options "allow_other allow_root versions allow_damaged_files uid gid umask"
+# FIXME This list is probably not full, but I tried to pick only those that are relevant to borg mount -o:
+set -l fuse_options "ac_attr_timeout= allow_damaged_files allow_other allow_root attr_timeout= auto auto_cache auto_unmount default_permissions entry_timeout= gid= group_id= kernel_cache max_read= negative_timeout= noauto noforget remember= remount rootmode= uid= umask= user user_id= versions"
 complete -c borg -f -s o                            -d 'Fuse mount OPTION' -a "$fuse_options"       -n "__fish_seen_subcommand_from mount"
 # Archive filters
 complete -c borg -f -s P -l 'prefix'                -d 'Only archive names starting with PREFIX'    -n "__fish_seen_subcommand_from mount"
@@ -267,7 +283,6 @@ complete -c borg         -l 'patterns-from'         -d 'Include/exclude paths fr
 complete -c borg -f      -l 'exclude-caches'        -d 'Exclude directories tagged as cache'        -n "__fish_seen_subcommand_from recreate"
 complete -c borg         -l 'exclude-if-present'    -d 'Exclude directories that contain FILENAME'  -n "__fish_seen_subcommand_from recreate"
 complete -c borg -f      -l 'keep-exclude-tags'     -d 'Keep tag files of excluded directories'     -n "__fish_seen_subcommand_from recreate"
-complete -c borg -f      -l 'keep-tag-files'        -d 'Keep tag files of excluded directories'     -n "__fish_seen_subcommand_from recreate"
 # Archive options
 complete -c borg -f      -l 'target'                -d "Create a new ARCHIVE"                       -n "__fish_seen_subcommand_from recreate"
 complete -c borg -f -s c -l 'checkpoint-interval'   -d 'Write checkpoint every N seconds [1800]'    -n "__fish_seen_subcommand_from recreate"
@@ -309,6 +324,8 @@ complete -c borg -f      -l 'list'                  -d 'List the configuration o
 # borg benchmark
 # no specific options
 
+# borg help
+# no specific options
 
 # List archives
 
@@ -322,3 +339,17 @@ function __fish_borg_list_archives
 end
 
 complete -c borg -f -n __fish_borg_is_repository -a '(__fish_borg_list_archives)'
+
+# Second archive listing for borg diff
+
+function __fish_borg_is_diff_second_archive
+    return (string match --quiet --regex ' diff .*::[^ ]+ '(commandline --current-token)'$' (commandline))
+end
+
+function __fish_borg_list_diff_archives
+    set -l repository_name (string match --regex '[^ ]*::' (commandline))
+    set -l repository_name (string replace '::' '' $repository_name)
+    borg list --format="{archive}{NEWLINE}" "$repository_name" ^/dev/null
+end
+
+complete -c borg -f -n __fish_borg_is_diff_second_archive -a '(__fish_borg_list_diff_archives)'

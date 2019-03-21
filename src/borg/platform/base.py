@@ -17,7 +17,7 @@ platform API: that way platform APIs provided by the platform-specific support m
 are correctly composed into the base functionality.
 """
 
-API_VERSION = '1.2_02'
+API_VERSION = '1.2_05'
 
 fdatasync = getattr(os, 'fdatasync', os.fsync)
 
@@ -61,7 +61,7 @@ def setxattr(path, name, value, *, follow_symlinks=False):
     """
 
 
-def acl_get(path, item, st, numeric_owner=False):
+def acl_get(path, item, st, numeric_owner=False, fd=None):
     """
     Saves ACL Entries
 
@@ -69,7 +69,7 @@ def acl_get(path, item, st, numeric_owner=False):
     """
 
 
-def acl_set(path, item, numeric_owner=False):
+def acl_set(path, item, numeric_owner=False, fd=None):
     """
     Restore ACL Entries
 
@@ -249,6 +249,9 @@ def getfqdn(name=''):
 # XXX this sometimes requires live internet access for issuing a DNS query in the background.
 hostname = socket.gethostname()
 fqdn = getfqdn(hostname)
+# some people put the fqdn into /etc/hostname (which is wrong, should be the short hostname)
+# fix this (do the same as "hostname --short" cli command does internally):
+hostname = hostname.split('.')[0]
 
 # uuid.getnode() is problematic in some environments (e.g. OpenVZ, see #3968) where the virtual MAC address
 # is all-zero. uuid.getnode falls back to returning a random value in that case, which is not what we want.

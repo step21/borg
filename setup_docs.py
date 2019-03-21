@@ -1,4 +1,3 @@
-# -*- encoding: utf-8 *-*
 # Support code for building docs (build_usage, build_man)
 
 import os
@@ -10,6 +9,20 @@ from collections import OrderedDict
 from datetime import datetime
 
 from setuptools import Command
+
+
+def long_desc_from_readme():
+    with open('README.rst', 'r') as fd:
+        long_description = fd.read()
+        # remove header, but have one \n before first headline
+        start = long_description.find('What is BorgBackup?')
+        assert start >= 0
+        long_description = '\n' + long_description[start:]
+        # remove badges
+        long_description = re.compile(r'^\.\. start-badges.*^\.\. end-badges', re.M | re.S).sub('', long_description)
+        # remove unknown directives
+        long_description = re.compile(r'^\.\. highlight:: \w+$', re.M).sub('', long_description)
+        return long_description
 
 
 def format_metavar(option):

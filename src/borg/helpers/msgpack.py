@@ -75,6 +75,11 @@ def pack(o, stream, *, use_bin_type=False, encoding=None, unicode_errors=None, *
         raise PackException(e)
 
 
+# Note: after requiring msgpack >= 0.6.1 we can remove the max_*_len args and
+#       rely on msgpack auto-computing DoS-safe max values from len(data) for
+#       unpack(data) or from max_buffer_len for Unpacker(max_buffer_len=N).
+#       maybe we can also use that to simplify get_limited_unpacker().
+
 class Unpacker(mp_Unpacker):
     def __init__(self, file_like=None, *, read_size=0, use_list=True, raw=True,
                  object_hook=None, object_pairs_hook=None, list_hook=None,
@@ -167,6 +172,13 @@ def is_slow_msgpack():
     import msgpack
     import msgpack.fallback
     return msgpack.Packer is msgpack.fallback.Packer
+
+
+def is_supported_msgpack():
+    # DO NOT CHANGE OR REMOVE! See also requirements and comments in setup.py.
+    import msgpack
+    return (0, 5, 6) <= msgpack.version <= (0, 6, 1) and \
+           msgpack.version not in []  # < blacklist bad releases here
 
 
 def get_limited_unpacker(kind):

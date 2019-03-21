@@ -1,81 +1,93 @@
-import argparse
-import collections
-import configparser
-import faulthandler
-import functools
-import hashlib
-import inspect
-import itertools
-import json
-import logging
-import os
-import re
-import shlex
-import shutil
-import signal
-import stat
-import subprocess
+# borg cli interface / toplevel archiver code
+
 import sys
-import tarfile
-import textwrap
-import time
 import traceback
-from binascii import unhexlify
-from contextlib import contextmanager
-from datetime import datetime, timedelta
-from itertools import zip_longest
 
-from .logger import create_logger, setup_logging
+try:
+    import argparse
+    import collections
+    import configparser
+    import faulthandler
+    import functools
+    import hashlib
+    import inspect
+    import itertools
+    import json
+    import logging
+    import os
+    import re
+    import shlex
+    import shutil
+    import signal
+    import stat
+    import subprocess
+    import tarfile
+    import textwrap
+    import time
+    from binascii import unhexlify
+    from contextlib import contextmanager
+    from datetime import datetime, timedelta
 
-logger = create_logger()
+    from .logger import create_logger, setup_logging
 
-import borg
-from . import __version__
-from . import helpers
-from .algorithms.checksums import crc32
-from .archive import Archive, ArchiveChecker, ArchiveRecreater, Statistics, is_special
-from .archive import BackupError, BackupOSError, backup_io
-from .archive import FilesystemObjectProcessors, MetadataCollector, ChunksProcessor
-from .cache import Cache, assert_secure, SecurityManager
-from .constants import *  # NOQA
-from .compress import CompressionSpec
-from .crypto.key import key_creator, key_argument_names, tam_required_file, tam_required, RepoKey, PassphraseKey
-from .crypto.keymanager import KeyManager
-from .helpers import EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR
-from .helpers import Error, NoManifestError, set_ec
-from .helpers import positive_int_validator, location_validator, archivename_validator, ChunkerParams, Location
-from .helpers import PrefixSpec, SortBySpec, FilesCacheMode
-from .helpers import BaseFormatter, ItemFormatter, ArchiveFormatter
-from .helpers import format_timedelta, format_file_size, parse_file_size, format_archive
-from .helpers import safe_encode, remove_surrogates, bin_to_hex, prepare_dump_dict
-from .helpers import interval, prune_within, prune_split, PRUNING_PATTERNS
-from .helpers import timestamp
-from .helpers import get_cache_dir
-from .helpers import Manifest, AI_HUMAN_SORT_KEYS
-from .helpers import hardlinkable
-from .helpers import StableDict
-from .helpers import check_python, check_extension_modules
-from .helpers import dir_is_tagged, is_slow_msgpack, yes, sysinfo
-from .helpers import log_multi
-from .helpers import signal_handler, raising_signal_handler, SigHup, SigTerm
-from .helpers import ErrorIgnoringTextIOWrapper
-from .helpers import ProgressIndicatorPercent
-from .helpers import basic_json_data, json_print
-from .helpers import replace_placeholders
-from .helpers import ChunkIteratorFileWrapper
-from .helpers import popen_with_error_handling, prepare_subprocess_env
-from .helpers import dash_open
-from .helpers import umount
-from .helpers import msgpack
-from .nanorst import rst_to_terminal
-from .patterns import ArgparsePatternAction, ArgparseExcludeFileAction, ArgparsePatternFileAction, parse_exclude_pattern
-from .patterns import PatternMatcher
-from .item import Item
-from .platform import get_flags, get_process_id, SyncFile
-from .remote import RepositoryServer, RemoteRepository, cache_if_remote
-from .repository import Repository, LIST_SCAN_LIMIT, TAG_PUT, TAG_DELETE, TAG_COMMIT
-from .selftest import selftest
-from .upgrader import AtticRepositoryUpgrader, BorgRepositoryUpgrader
+    logger = create_logger()
+
+    import borg
+    from . import __version__
+    from . import helpers
+    from .algorithms.checksums import crc32
+    from .archive import Archive, ArchiveChecker, ArchiveRecreater, Statistics, is_special
+    from .archive import BackupError, BackupOSError, backup_io, OsOpen, stat_update_check
+    from .archive import FilesystemObjectProcessors, MetadataCollector, ChunksProcessor
+    from .cache import Cache, assert_secure, SecurityManager
+    from .constants import *  # NOQA
+    from .compress import CompressionSpec
+    from .crypto.key import key_creator, key_argument_names, tam_required_file, tam_required, RepoKey, PassphraseKey
+    from .crypto.keymanager import KeyManager
+    from .helpers import EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR
+    from .helpers import Error, NoManifestError, set_ec
+    from .helpers import positive_int_validator, location_validator, archivename_validator, ChunkerParams, Location
+    from .helpers import PrefixSpec, SortBySpec, FilesCacheMode
+    from .helpers import BaseFormatter, ItemFormatter, ArchiveFormatter
+    from .helpers import format_timedelta, format_file_size, parse_file_size, format_archive
+    from .helpers import safe_encode, remove_surrogates, bin_to_hex, prepare_dump_dict
+    from .helpers import interval, prune_within, prune_split, PRUNING_PATTERNS
+    from .helpers import timestamp
+    from .helpers import get_cache_dir, os_stat
+    from .helpers import Manifest, AI_HUMAN_SORT_KEYS
+    from .helpers import hardlinkable
+    from .helpers import StableDict
+    from .helpers import check_python, check_extension_modules
+    from .helpers import dir_is_tagged, is_slow_msgpack, is_supported_msgpack, yes, sysinfo
+    from .helpers import log_multi
+    from .helpers import signal_handler, raising_signal_handler, SigHup, SigTerm
+    from .helpers import ErrorIgnoringTextIOWrapper
+    from .helpers import ProgressIndicatorPercent
+    from .helpers import basic_json_data, json_print
+    from .helpers import replace_placeholders
+    from .helpers import ChunkIteratorFileWrapper
+    from .helpers import popen_with_error_handling, prepare_subprocess_env
+    from .helpers import dash_open
+    from .helpers import umount
+    from .helpers import flags_root, flags_dir, flags_special_follow, flags_special
+    from .helpers import msgpack
+    from .nanorst import rst_to_terminal
+    from .patterns import ArgparsePatternAction, ArgparseExcludeFileAction, ArgparsePatternFileAction, parse_exclude_pattern
+    from .patterns import PatternMatcher
+    from .item import Item
+    from .platform import get_flags, get_process_id, SyncFile
+    from .remote import RepositoryServer, RemoteRepository, cache_if_remote
+    from .repository import Repository, LIST_SCAN_LIMIT, TAG_PUT, TAG_DELETE, TAG_COMMIT
+    from .selftest import selftest
+    from .upgrader import AtticRepositoryUpgrader, BorgRepositoryUpgrader
+except BaseException:
+    # an unhandled exception in the try-block would cause the borg cli command to exit with rc 1 due to python's
+    # default behavior, see issue #4424.
+    # as borg defines rc 1 as WARNING, this would be a mismatch, because a crash should be an ERROR (rc 2).
+    traceback.print_exc()
+    sys.exit(2)  # == EXIT_ERROR
+
+assert EXIT_ERROR == 2, "EXIT_ERROR is not 2, as expected - fix assert AND exception handler right above this line."
 
 
 STATS_HEADER = "                       Original size      Compressed size    Deduplicated size"
@@ -124,15 +136,17 @@ def with_repository(fake=False, invert_fake=False, create=False, lock=True,
             location = args.location  # note: 'location' must be always present in args
             append_only = getattr(args, 'append_only', False)
             storage_quota = getattr(args, 'storage_quota', None)
+            make_parent_dirs = getattr(args, 'make_parent_dirs', False)
             if argument(args, fake) ^ invert_fake:
                 return method(self, args, repository=None, **kwargs)
             elif location.proto == 'ssh':
                 repository = RemoteRepository(location, create=create, exclusive=argument(args, exclusive),
-                                              lock_wait=self.lock_wait, lock=lock, append_only=append_only, args=args)
+                                              lock_wait=self.lock_wait, lock=lock, append_only=append_only,
+                                              make_parent_dirs=make_parent_dirs, args=args)
             else:
                 repository = Repository(location.path, create=create, exclusive=argument(args, exclusive),
                                         lock_wait=self.lock_wait, lock=lock, append_only=append_only,
-                                        storage_quota=storage_quota)
+                                        storage_quota=storage_quota, make_parent_dirs=make_parent_dirs)
             with repository:
                 if manifest or cache:
                     kwargs['manifest'], kwargs['key'] = Manifest.load(repository, compatibility)
@@ -287,8 +301,18 @@ class Archiver:
         if args.repo_only and any((args.verify_data, args.first, args.last, args.prefix)):
             self.print_error("--repository-only contradicts --first, --last, --prefix and --verify-data arguments.")
             return EXIT_ERROR
+        if args.repair and args.max_duration:
+            self.print_error("--repair does not allow --max-duration argument.")
+            return EXIT_ERROR
+        if args.max_duration and not args.repo_only:
+            # when doing a partial repo check, we can only check crc32 checksums in segment files,
+            # we can't build a fresh repo index in memory to verify the on-disk index against it.
+            # thus, we should not do an archives check based on a unknown-quality on-disk repo index.
+            # also, there is no max_duration support in the archives check code anyway.
+            self.print_error("--repository-only is required for --max-duration support.")
+            return EXIT_ERROR
         if not args.archives_only:
-            if not repository.check(repair=args.repair, save_space=args.save_space):
+            if not repository.check(repair=args.repair, save_space=args.save_space, max_duration=args.max_duration):
                 return EXIT_WARNING
         if args.prefix:
             args.glob_archives = args.prefix + '*'
@@ -323,10 +347,14 @@ class Archiver:
             if not args.path:
                 self.print_error("output file to export key to expected")
                 return EXIT_ERROR
-            if args.qr:
-                manager.export_qr(args.path)
-            else:
-                manager.export(args.path)
+            try:
+                if args.qr:
+                    manager.export_qr(args.path)
+                else:
+                    manager.export(args.path)
+            except IsADirectoryError:
+                self.print_error("'{}' must be a file, not a directory".format(args.path))
+                return EXIT_ERROR
         return EXIT_SUCCESS
 
     @with_repository(lock=False, exclusive=False, manifest=False, cache=False)
@@ -468,7 +496,7 @@ class Archiver:
                     path = args.stdin_name
                     if not dry_run:
                         try:
-                            status = fso.process_stdin(path, cache)
+                            status = fso.process_stdin(path=path, cache=cache)
                         except BackupOSError as e:
                             status = 'E'
                             self.print_warning('%s: %s', path, e)
@@ -477,24 +505,31 @@ class Archiver:
                     self.print_file_status(status, path)
                     continue
                 path = os.path.normpath(path)
-                try:
-                    st = os.stat(path, follow_symlinks=False)
-                except OSError as e:
-                    self.print_warning('%s: %s', path, e)
-                    continue
-                if args.one_file_system:
-                    restrict_dev = st.st_dev
-                else:
-                    restrict_dev = None
-                self._process(fso, cache, matcher, args.exclude_caches, args.exclude_if_present,
-                              args.keep_exclude_tags, skip_inodes, path, restrict_dev,
-                              read_special=args.read_special, dry_run=dry_run, st=st)
+                parent_dir = os.path.dirname(path) or '.'
+                name = os.path.basename(path)
+                # note: for path == '/':  name == '' and parent_dir == '/'.
+                # the empty name will trigger a fall-back to path-based processing in os_stat and os_open.
+                with OsOpen(path=parent_dir, flags=flags_root, noatime=True, op='open_root') as parent_fd:
+                    try:
+                        st = os_stat(path=path, parent_fd=parent_fd, name=name, follow_symlinks=False)
+                    except OSError as e:
+                        self.print_warning('%s: %s', path, e)
+                        continue
+                    if args.one_file_system:
+                        restrict_dev = st.st_dev
+                    else:
+                        restrict_dev = None
+                    self._process(path=path, parent_fd=parent_fd, name=name,
+                                  fso=fso, cache=cache, matcher=matcher,
+                                  exclude_caches=args.exclude_caches, exclude_if_present=args.exclude_if_present,
+                                  keep_exclude_tags=args.keep_exclude_tags, skip_inodes=skip_inodes,
+                                  restrict_dev=restrict_dev, read_special=args.read_special, dry_run=dry_run)
             if not dry_run:
-                archive.save(comment=args.comment, timestamp=args.timestamp)
                 if args.progress:
                     archive.stats.show_progress(final=True)
-                args.stats |= args.json
                 archive.stats += fso.stats
+                archive.save(comment=args.comment, timestamp=args.timestamp, stats=archive.stats)
+                args.stats |= args.json
                 if args.stats:
                     if args.json:
                         json_print(basic_json_data(manifest, cache=cache, extra={
@@ -540,22 +575,20 @@ class Archiver:
             create_inner(None, None, None)
         return self.exit_code
 
-    def _process(self, fso, cache, matcher, exclude_caches, exclude_if_present,
-                 keep_exclude_tags, skip_inodes, path, restrict_dev,
-                 read_special=False, dry_run=False, st=None):
+    def _process(self, *, path, parent_fd=None, name=None,
+                 fso, cache, matcher,
+                 exclude_caches, exclude_if_present, keep_exclude_tags, skip_inodes,
+                 restrict_dev, read_special=False, dry_run=False):
         """
-        Process *path* recursively according to the various parameters.
-
-        *st* (if given) is a *os.stat_result* object for *path*.
+        Process *path* (or, preferably, parent_fd/name) recursively according to the various parameters.
 
         This should only raise on critical errors. Per-item errors must be handled within this method.
         """
         try:
             recurse_excluded_dir = False
             if matcher.match(path):
-                if st is None:
-                    with backup_io('stat'):
-                        st = os.stat(path, follow_symlinks=False)
+                with backup_io('stat'):
+                    st = os_stat(path=path, parent_fd=parent_fd, name=name, follow_symlinks=False)
             else:
                 self.print_file_status('x', path)
                 # get out here as quickly as possible:
@@ -564,9 +597,8 @@ class Archiver:
                 # could trigger an error, e.g. if access is forbidden, see #3209.
                 if not matcher.recurse_dir:
                     return
-                if st is None:
-                    with backup_io('stat'):
-                        st = os.stat(path, follow_symlinks=False)
+                with backup_io('stat'):
+                    st = os_stat(path=path, parent_fd=parent_fd, name=name, follow_symlinks=False)
                 recurse_excluded_dir = stat.S_ISDIR(st.st_mode)
                 if not recurse_excluded_dir:
                     return
@@ -581,71 +613,84 @@ class Archiver:
             if self.exclude_nodump:
                 # Ignore if nodump flag is set
                 with backup_io('flags'):
-                    if get_flags(path, st) & stat.UF_NODUMP:
+                    if get_flags(path=path, st=st) & stat.UF_NODUMP:
                         self.print_file_status('x', path)
                         return
             if stat.S_ISREG(st.st_mode):
                 if not dry_run:
-                    status = fso.process_file(path, st, cache)
+                    status = fso.process_file(path=path, parent_fd=parent_fd, name=name, st=st, cache=cache)
             elif stat.S_ISDIR(st.st_mode):
-                if recurse:
-                    tag_paths = dir_is_tagged(path, exclude_caches, exclude_if_present)
-                    if tag_paths:
-                        # if we are already recursing in an excluded dir, we do not need to do anything else than
-                        # returning (we do not need to archive or recurse into tagged directories), see #3991:
+                with OsOpen(path=path, parent_fd=parent_fd, name=name, flags=flags_dir,
+                            noatime=True, op='dir_open') as child_fd:
+                    with backup_io('fstat'):
+                        st = stat_update_check(st, os.fstat(child_fd))
+                    if recurse:
+                        tag_names = dir_is_tagged(path, exclude_caches, exclude_if_present)
+                        if tag_names:
+                            # if we are already recursing in an excluded dir, we do not need to do anything else than
+                            # returning (we do not need to archive or recurse into tagged directories), see #3991:
+                            if not recurse_excluded_dir:
+                                if keep_exclude_tags and not dry_run:
+                                    fso.process_dir(path=path, fd=child_fd, st=st)
+                                    for tag_name in tag_names:
+                                        tag_path = os.path.join(path, tag_name)
+                                        self._process(path=tag_path, parent_fd=child_fd, name=tag_name,
+                                                      fso=fso, cache=cache, matcher=matcher,
+                                                      exclude_caches=exclude_caches, exclude_if_present=exclude_if_present,
+                                                      keep_exclude_tags=keep_exclude_tags, skip_inodes=skip_inodes,
+                                                      restrict_dev=restrict_dev, read_special=read_special, dry_run=dry_run)
+                                self.print_file_status('x', path)
+                            return
+                    if not dry_run:
                         if not recurse_excluded_dir:
-                            if keep_exclude_tags and not dry_run:
-                                fso.process_dir(path, st)
-                                for tag_path in tag_paths:
-                                    self._process(fso, cache, matcher, exclude_caches, exclude_if_present,
-                                                  keep_exclude_tags, skip_inodes, tag_path, restrict_dev,
-                                                  read_special=read_special, dry_run=dry_run)
-                            self.print_file_status('x', path)
-                        return
-                if not dry_run:
-                    if not recurse_excluded_dir:
-                        status = fso.process_dir(path, st)
-                if recurse:
-                    with backup_io('scandir'):
-                        entries = helpers.scandir_inorder(path)
-                    for dirent in entries:
-                        normpath = os.path.normpath(dirent.path)
-                        self._process(fso, cache, matcher, exclude_caches, exclude_if_present,
-                                      keep_exclude_tags, skip_inodes, normpath, restrict_dev,
-                                      read_special=read_special, dry_run=dry_run)
+                            status = fso.process_dir(path=path, fd=child_fd, st=st)
+                    if recurse:
+                        with backup_io('scandir'):
+                            entries = helpers.scandir_inorder(path=path, fd=child_fd)
+                        for dirent in entries:
+                            normpath = os.path.normpath(os.path.join(path, dirent.name))
+                            self._process(path=normpath, parent_fd=child_fd, name=dirent.name,
+                                          fso=fso, cache=cache, matcher=matcher,
+                                          exclude_caches=exclude_caches, exclude_if_present=exclude_if_present,
+                                          keep_exclude_tags=keep_exclude_tags, skip_inodes=skip_inodes,
+                                          restrict_dev=restrict_dev, read_special=read_special, dry_run=dry_run)
             elif stat.S_ISLNK(st.st_mode):
                 if not dry_run:
                     if not read_special:
-                        status = fso.process_symlink(path, st)
+                        status = fso.process_symlink(path=path, parent_fd=parent_fd, name=name, st=st)
                     else:
                         try:
-                            st_target = os.stat(path)
+                            st_target = os.stat(name, dir_fd=parent_fd, follow_symlinks=True)
                         except OSError:
                             special = False
                         else:
                             special = is_special(st_target.st_mode)
                         if special:
-                            status = fso.process_file(path, st_target, cache)
+                            status = fso.process_file(path=path, parent_fd=parent_fd, name=name, st=st_target,
+                                                      cache=cache, flags=flags_special_follow)
                         else:
-                            status = fso.process_symlink(path, st)
+                            status = fso.process_symlink(path=path, parent_fd=parent_fd, name=name, st=st)
             elif stat.S_ISFIFO(st.st_mode):
                 if not dry_run:
                     if not read_special:
-                        status = fso.process_fifo(path, st)
+                        status = fso.process_fifo(path=path, parent_fd=parent_fd, name=name, st=st)
                     else:
-                        status = fso.process_file(path, st, cache)
+                        status = fso.process_file(path=path, parent_fd=parent_fd, name=name, st=st,
+                                                  cache=cache, flags=flags_special)
             elif stat.S_ISCHR(st.st_mode):
                 if not dry_run:
                     if not read_special:
-                        status = fso.process_dev(path, st, 'c')
+                        status = fso.process_dev(path=path, parent_fd=parent_fd, name=name, st=st, dev_type='c')
                     else:
-                        status = fso.process_file(path, st, cache)
+                        status = fso.process_file(path=path, parent_fd=parent_fd, name=name, st=st,
+                                                  cache=cache, flags=flags_special)
             elif stat.S_ISBLK(st.st_mode):
                 if not dry_run:
                     if not read_special:
-                        status = fso.process_dev(path, st, 'b')
+                        status = fso.process_dev(path=path, parent_fd=parent_fd, name=name, st=st, dev_type='b')
                     else:
-                        status = fso.process_file(path, st, cache)
+                        status = fso.process_file(path=path, parent_fd=parent_fd, name=name, st=st,
+                                                  cache=cache, flags=flags_special)
             elif stat.S_ISSOCK(st.st_mode):
                 # Ignore unix sockets
                 return
@@ -658,9 +703,11 @@ class Archiver:
             else:
                 self.print_warning('Unknown file type: %s', path)
                 return
-        except BackupOSError as e:
+        except (BackupOSError, BackupError) as e:
             self.print_warning('%s: %s', path, e)
             status = 'E'
+        if status == 'C':
+            self.print_warning('%s: file changed while we backed it up', path)
         # Status output
         if status is None:
             if not dry_run:
@@ -1060,14 +1107,14 @@ class Archiver:
             deleted = False
             for i, archive_name in enumerate(archive_names, 1):
                 try:
-                    del manifest.archives[archive_name]
+                    current_archive = manifest.archives.pop(archive_name)
                 except KeyError:
                     self.exit_code = EXIT_WARNING
                     logger.warning('Archive {} not found ({}/{}).'.format(archive_name, i, len(archive_names)))
                 else:
                     deleted = True
                     msg = 'Would delete: {} ({}/{})' if dry_run else 'Deleted archive: {} ({}/{})'
-                    logger.info(msg.format(archive_name, i, len(archive_names)))
+                    logger.info(msg.format(format_archive(current_archive), i, len(archive_names)))
             if dry_run:
                 logger.info('Finished dry-run.')
             elif deleted:
@@ -1083,7 +1130,7 @@ class Archiver:
         with Cache(repository, key, manifest, progress=args.progress, lock_wait=self.lock_wait) as cache:
             for i, archive_name in enumerate(archive_names, 1):
                 msg = 'Would delete archive: {} ({}/{})' if dry_run else 'Deleting archive: {} ({}/{})'
-                logger.info(msg.format(archive_name, i, len(archive_names)))
+                logger.info(msg.format(format_archive(manifest.archives[archive_name]), i, len(archive_names)))
                 if not dry_run:
                     Archive(repository, key, manifest, archive_name, cache=cache).delete(
                         stats, progress=args.progress, forced=args.forced)
@@ -1620,6 +1667,10 @@ class Archiver:
                 print('%s = %s' % (key, value))
 
         if not args.list:
+            if args.name is None:
+                self.print_error('No config key name was provided.')
+                return self.exit_code
+
             try:
                 section, name = args.name.split('.')
             except ValueError:
@@ -1824,7 +1875,7 @@ class Archiver:
             if wanted.startswith('hex:'):
                 wanted = unhexlify(wanted[4:])
             elif wanted.startswith('str:'):
-                wanted = wanted[4:].encode('utf-8')
+                wanted = wanted[4:].encode()
             else:
                 raise ValueError('unsupported search term')
         except (ValueError, UnicodeEncodeError):
@@ -1984,7 +2035,7 @@ class Archiver:
             any number of characters, '?' matching any single character, '[...]'
             matching any single character specified, including ranges, and '[!...]'
             matching any character not specified. For the purpose of these patterns,
-            the path separator ('\\' for Windows and '/' on other systems) is not
+            the path separator (backslash for Windows and '/' on other systems) is not
             treated specially. Wrap meta-characters in brackets for a literal
             match (i.e. `[?]` to match the literal character `?`). For a path
             to match a pattern, the full path must match, or it must match
@@ -2005,7 +2056,7 @@ class Archiver:
             shell patterns regular expressions are not required to match the full
             path and any substring match is sufficient. It is strongly recommended to
             anchor patterns to the start ('^'), to the end ('$') or both. Path
-            separators ('\\' for Windows and '/' on other systems) in paths are
+            separators (backslash for Windows and '/' on other systems) in paths are
             always normalized to a forward slash ('/') before applying a pattern. The
             regular expression syntax is described in the `Python documentation for
             the re module <https://docs.python.org/3/library/re.html>`_.
@@ -2470,6 +2521,8 @@ class Archiver:
             add_common_option('--debug-profile', metavar='FILE', dest='debug_profile', default=None,
                               help='Write execution profile in Borg format into FILE. For local use a Python-'
                                    'compatible file can be generated by suffixing FILE with ".pyprof".')
+            add_common_option('--rsh', metavar='RSH', dest='rsh',
+                              help="Use this command to connect to the 'borg serve' process (default: 'ssh')")
 
         def define_exclude_and_patterns(add_option, *, tag_files=False, strip_components=False):
             add_option('-e', '--exclude', metavar='PATTERN', dest='patterns',
@@ -2562,14 +2615,18 @@ class Archiver:
         To allow a regular user to use fstab entries, add the ``user`` option:
         ``/path/to/repo /mnt/point fuse.borgfs defaults,noauto,user 0 0``
 
-        For mount options, see the fuse(8) manual page. Additional mount options
-        supported by borg:
+        For FUSE configuration and mount options, see the mount.fuse(8) manual page.
+
+        Additional mount options supported by borg:
 
         - versions: when used with a repository mount, this gives a merged, versioned
           view of the files in the archives. EXPERIMENTAL, layout may change in future.
         - allow_damaged_files: by default damaged files (where missing chunks were
           replaced with runs of zeros by borg check ``--repair``) are not readable and
           return EIO (I/O error). Set this option to read such files.
+        - ignore_permissions: for security reasons the "default_permissions" mount
+          option is internally enforced by borg. "ignore_permissions" can be given to
+          not enforce "default_permissions".
 
         The BORG_MOUNT_DATA_CACHE_ENTRIES environment variable is meant for advanced users
         to tweak the performance. It sets the number of cached data chunks; additional
@@ -2767,6 +2824,8 @@ class Archiver:
         subparser.add_argument('--storage-quota', metavar='QUOTA', dest='storage_quota', default=None,
                                type=parse_storage_quota,
                                help='Set storage quota of the new repository (e.g. 5G, 1.5T). Default: no quota.')
+        subparser.add_argument('--make-parent-dirs', dest='make_parent_dirs', action='store_true',
+                               help='create the parent directories of the repository directory, if they are missing.')
 
         check_epilog = process_epilog("""
         The check command verifies the consistency of a repository and the corresponding archives.
@@ -2835,6 +2894,9 @@ class Archiver:
                                help='attempt to repair any inconsistencies found')
         subparser.add_argument('--save-space', dest='save_space', action='store_true',
                                help='work slower, but using less space')
+        subparser.add_argument('--max-duration', metavar='SECONDS', dest='max_duration',
+                                   type=int, default=0,
+                                   help='do only a partial repo check for max. SECONDS seconds (Default: unlimited)')
         define_archive_filters_group(subparser)
 
         subparser = subparsers.add_parser('key', parents=[mid_common_parser], add_help=False,
@@ -3057,6 +3119,7 @@ class Archiver:
         - 'A' = regular file, added (see also :ref:`a_status_oddity` in the FAQ)
         - 'M' = regular file, modified
         - 'U' = regular file, unchanged
+        - 'C' = regular file, it changed while we backed it up
         - 'E' = regular file, an error happened while accessing/reading *this* file
 
         A lowercase character means a file type other than a regular file,
@@ -3137,8 +3200,8 @@ class Archiver:
                                    help='write checkpoint every SECONDS seconds (Default: 1800)')
         archive_group.add_argument('--chunker-params', metavar='PARAMS', dest='chunker_params',
                                    type=ChunkerParams, default=CHUNKER_PARAMS,
-                                   help='specify the chunker parameters (CHUNK_MIN_EXP, CHUNK_MAX_EXP, '
-                                        'HASH_MASK_BITS, HASH_WINDOW_SIZE). default: %d,%d,%d,%d' % CHUNKER_PARAMS)
+                                   help='specify the chunker parameters (ALGO, CHUNK_MIN_EXP, CHUNK_MAX_EXP, '
+                                        'HASH_MASK_BITS, HASH_WINDOW_SIZE). default: %s,%d,%d,%d,%d' % CHUNKER_PARAMS)
         archive_group.add_argument('-C', '--compression', metavar='COMPRESSION', dest='compression',
                                    type=CompressionSpec, default=CompressionSpec('lz4'),
                                    help='select compression algorithm, see the output of the '
@@ -3754,9 +3817,9 @@ class Archiver:
                                         'do not recompress.')
         archive_group.add_argument('--chunker-params', metavar='PARAMS', dest='chunker_params',
                                    type=ChunkerParams, default=CHUNKER_PARAMS,
-                                   help='specify the chunker parameters (CHUNK_MIN_EXP, CHUNK_MAX_EXP, '
+                                   help='specify the chunker parameters (ALGO, CHUNK_MIN_EXP, CHUNK_MAX_EXP, '
                                         'HASH_MASK_BITS, HASH_WINDOW_SIZE) or `default` to use the current defaults. '
-                                        'default: %d,%d,%d,%d' % CHUNKER_PARAMS)
+                                        'default: %s,%d,%d,%d,%d' % CHUNKER_PARAMS)
 
         subparser.add_argument('location', metavar='REPOSITORY_OR_ARCHIVE', nargs='?', default='',
                                type=location_validator(),
@@ -4181,6 +4244,11 @@ class Archiver:
         if args.show_version:
             logging.getLogger('borg.output.show-version').info('borgbackup version %s' % __version__)
         self.prerun_checks(logger)
+        if not is_supported_msgpack():
+            logger.error("You do not have a supported version of the msgpack python package installed. Terminating.")
+            logger.error("This should never happen as specific, supported versions are required by our setup.py.")
+            logger.error("Do not contact borgbackup support about this.")
+            return set_ec(EXIT_ERROR)
         if is_slow_msgpack():
             logger.warning("Using a pure-python msgpack! This will result in lower performance.")
         if args.debug_profile:

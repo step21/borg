@@ -1,7 +1,7 @@
 import stat
 from collections import namedtuple
 
-from .constants import ITEM_KEYS
+from .constants import ITEM_KEYS, ARCHIVE_KEYS
 from .helpers import safe_encode, safe_decode
 from .helpers import bigint_to_int, int_to_bigint
 from .helpers import StableDict
@@ -12,7 +12,7 @@ cdef extern from "_item.c":
     object _optr_to_object(object bytes)
 
 
-API_VERSION = '1.1_03'
+API_VERSION = '1.2_01'
 
 
 class PropDict:
@@ -325,6 +325,18 @@ class Key(PropDict):
     tam_required = PropDict._make_property('tam_required', bool)
 
 
+def tuple_encode(t):
+    """encode a tuple that might contain str items"""
+    # we have str, but want to give bytes to msgpack.pack
+    return tuple(safe_encode(e) if isinstance(e, str) else e for e in t)
+
+
+def tuple_decode(t):
+    """decode a tuple that might contain bytes items"""
+    # we get bytes objects from msgpack.unpack, but want str
+    return tuple(safe_decode(e) if isinstance(e, bytes) else e for e in t)
+
+
 class ArchiveItem(PropDict):
     """
     ArchiveItem abstraction that deals with validation and the low-level details internally:
@@ -337,10 +349,7 @@ class ArchiveItem(PropDict):
     If a ArchiveItem shall be serialized, give as_dict() method output to msgpack packer.
     """
 
-    VALID_KEYS = {'version', 'name', 'items', 'cmdline', 'hostname', 'username', 'time', 'time_end',
-                  'comment', 'chunker_params',
-                  'recreate_cmdline', 'recreate_source_id', 'recreate_args', 'recreate_partial_chunks',
-                  }  # str-typed keys
+    VALID_KEYS = ARCHIVE_KEYS  # str-typed keys
 
     __slots__ = ("_dict", )  # avoid setting attributes not supported by properties
 
@@ -353,11 +362,18 @@ class ArchiveItem(PropDict):
     time = PropDict._make_property('time', str, 'surrogate-escaped str', encode=safe_encode, decode=safe_decode)
     time_end = PropDict._make_property('time_end', str, 'surrogate-escaped str', encode=safe_encode, decode=safe_decode)
     comment = PropDict._make_property('comment', str, 'surrogate-escaped str', encode=safe_encode, decode=safe_decode)
-    chunker_params = PropDict._make_property('chunker_params', tuple)
-    recreate_source_id = PropDict._make_property('recreate_source_id', bytes)
+    chunker_params = PropDict._make_property('chunker_params', tuple, 'chunker-params tuple', encode=tuple_encode, decode=tuple_decode)
     recreate_cmdline = PropDict._make_property('recreate_cmdline', list)  # list of s-e-str
+    # recreate_source_id, recreate_args, recreate_partial_chunks were used in 1.1.0b1 .. b2
+    recreate_source_id = PropDict._make_property('recreate_source_id', bytes)
     recreate_args = PropDict._make_property('recreate_args', list)  # list of s-e-str
     recreate_partial_chunks = PropDict._make_property('recreate_partial_chunks', list)  # list of tuples
+    size = PropDict._make_property('size', int)
+    csize = PropDict._make_property('csize', int)
+    nfiles = PropDict._make_property('nfiles', int)
+    size_parts = PropDict._make_property('size_parts', int)
+    csize_parts = PropDict._make_property('csize_parts', int)
+    nfiles_parts = PropDict._make_property('nfiles_parts', int)
 
 
 class ManifestItem(PropDict):

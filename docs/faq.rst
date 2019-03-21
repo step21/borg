@@ -26,28 +26,52 @@ or deleting archives, which may make *simultaneous* backups fail.
 Can I copy or synchronize my repo to another location?
 ------------------------------------------------------
 
-Yes, you could just copy all the files. Make sure you do that while no
-backup is running. If you copy a repository while a backup is running, 
-the lock held will be present in the copy. Thus, before using borg on the copy 
-from a different host, you need to use :ref:`break-lock` on the copied 
-repository, because Borg is cautious and does not automatically remove 
-stale locks made by a different host.
+If you want to have redundant backup repositories (preferably at separate
+locations), the recommended way to do that is like this:
 
-So what you get here is this: 
-
-- client machine ---borg create---> repo1
-- repo1 ---copy---> repo2
-
-There is no special borg command to do the copying, just use cp or rsync if
-you want to do that.
-
-But think about whether that is really what you want. If something goes
-wrong in repo1, you will have the same issue in repo2 after the copy.
-
-If you want to have 2 independent backups, it is better to do it like this:
-
+- ``borg init repo1``
+- ``borg init repo2``
 - client machine ---borg create---> repo1
 - client machine ---borg create---> repo2
+
+This will create distinct repositories (separate repo ID, separate
+keys) and nothing bad happening in repo1 will influence repo2.
+
+Some people decide against above recommendation and create identical
+copies of a repo (using some copy / sync / clone tool).
+
+While this might be better than having no redundancy at all, you have
+to be very careful about how you do that and what you may / must not
+do with the result (if you decide against our recommendation).
+
+What you would get with this is:
+
+- client machine ---borg create---> repo
+- repo ---copy/sync---> copy-of-repo
+
+There is no special borg command to do the copying, you could just
+use any reliable tool that creates an identical copy (cp, rsync, rclone
+might be options).
+
+But think about whether that is really what you want. If something goes
+wrong in repo, you will have the same issue in copy-of-repo.
+
+Make sure you do the copy/sync while no backup is running, see
+:ref:`borg_with-lock` about how to do that.
+
+Also, you must not run borg against multiple instances of the same repo
+(like repo and copy-of-repo) as that would create severe issues:
+
+- Data loss: they have the same repository ID, so the borg client will
+  think they are identical and e.g. use the same local cache for them
+  (which is an issue if they happen to be not the same).
+  See :issue:`4272` for an example.
+- Encryption security issues if you would update repo and copy-of-repo
+  independently, due to AES counter reuse.
+
+There is also a similar encryption security issue for the disaster case:
+If you lose repo and the borg client-side config/cache and you restore
+the repo from an older copy-of-repo, you also run into AES counter reuse.
 
 Which file types, attributes, etc. are *not* preserved?
 -------------------------------------------------------
@@ -295,6 +319,15 @@ the :ref:`borg_recreate` command to rewrite all archives with a
 different ``--exclude`` pattern. See the examples in the
 :ref:`borg_recreate` manpage for more information.
 
+Can I safely change the compression level or algorithm?
+--------------------------------------------------------
+
+The compression level and algorithm don't affect deduplication. Chunk ID hashes
+are calculated *before* compression. New compression settings
+will only be applied to new chunks, not existing chunks. So it's safe
+to change them.
+
+
 Security
 ########
 
@@ -329,7 +362,7 @@ Using ``BORG_PASSCOMMAND`` with a properly permissioned file
 
   Then in an automated script one can put::
 
-    export BORG_PASSCOMMAND="cat ~/.borg-passphrase"
+    export BORG_PASSCOMMAND="cat $HOME/.borg-passphrase"
 
   and Borg will automatically use that passphrase.
 
@@ -727,6 +760,17 @@ to make it behave correctly::
     sshfs -o workaround=rename user@host:dir /mnt/dir
 
 .. _workaround: https://unix.stackexchange.com/a/123236
+
+
+Can I disable checking for free disk space?
+-------------------------------------------
+
+In some cases, the free disk space of the target volume is reported incorrectly.
+This can happen for CIFS- or FUSE shares. If you are sure that your target volume
+will always have enough disk space, you can use the following workaround to disable
+checking for free disk space::
+
+    borg config -- $REPO_LOCATION additional_free_space -2T
 
 
 Miscellaneous

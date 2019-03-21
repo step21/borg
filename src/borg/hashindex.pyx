@@ -11,7 +11,7 @@ from cpython.exc cimport PyErr_SetFromErrnoWithFilename
 from cpython.buffer cimport PyBUF_SIMPLE, PyObject_GetBuffer, PyBuffer_Release
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_CheckExact, PyBytes_GET_SIZE, PyBytes_AS_STRING
 
-API_VERSION = '1.1_07'
+API_VERSION = '1.2_01'
 
 
 cdef extern from "_hashindex.c":
@@ -45,7 +45,12 @@ cdef extern from "cache_sync/cache_sync.c":
 
     CacheSyncCtx *cache_sync_init(HashIndex *chunks)
     const char *cache_sync_error(const CacheSyncCtx *ctx)
-    uint64_t cache_sync_num_files(const CacheSyncCtx *ctx)
+    uint64_t cache_sync_num_files_totals(const CacheSyncCtx *ctx)
+    uint64_t cache_sync_num_files_parts(const CacheSyncCtx *ctx)
+    uint64_t cache_sync_size_totals(const CacheSyncCtx *ctx)
+    uint64_t cache_sync_size_parts(const CacheSyncCtx *ctx)
+    uint64_t cache_sync_csize_totals(const CacheSyncCtx *ctx)
+    uint64_t cache_sync_csize_parts(const CacheSyncCtx *ctx)
     int cache_sync_feed(CacheSyncCtx *ctx, void *data, uint32_t length)
     void cache_sync_free(CacheSyncCtx *ctx)
 
@@ -526,5 +531,25 @@ cdef class CacheSynchronizer:
                 raise ValueError('cache_sync_feed failed: ' + error.decode('ascii'))
 
     @property
-    def num_files(self):
-        return cache_sync_num_files(self.sync)
+    def num_files_totals(self):
+        return cache_sync_num_files_totals(self.sync)
+
+    @property
+    def num_files_parts(self):
+        return cache_sync_num_files_parts(self.sync)
+
+    @property
+    def size_totals(self):
+        return cache_sync_size_totals(self.sync)
+
+    @property
+    def size_parts(self):
+        return cache_sync_size_parts(self.sync)
+
+    @property
+    def csize_totals(self):
+        return cache_sync_csize_totals(self.sync)
+
+    @property
+    def csize_parts(self):
+        return cache_sync_csize_parts(self.sync)

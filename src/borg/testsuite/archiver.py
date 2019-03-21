@@ -32,7 +32,7 @@ except ImportError:
 
 import borg
 from .. import xattr, helpers, platform
-from ..archive import Archive, ChunkBuffer, flags_noatime, flags_normal
+from ..archive import Archive, ChunkBuffer
 from ..archiver import Archiver, parse_storage_quota
 from ..cache import Cache, LocalCache
 from ..constants import *  # NOQA
@@ -46,6 +46,7 @@ from ..helpers import EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR
 from ..helpers import bin_to_hex
 from ..helpers import MAX_S
 from ..helpers import msgpack
+from ..helpers import flags_noatime, flags_normal
 from ..nanorst import RstToTextLazy, rst_to_terminal
 from ..patterns import IECommand, PatternMatcher, parse_pattern
 from ..item import Item, ItemDiff
@@ -438,6 +439,17 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         # the interesting parts of info_output2 and info_output should be same
         self.assert_equal(filter(info_output), filter(info_output2))
 
+    def test_init_parent_dirs(self):
+        parent_path = os.path.join(self.tmpdir, 'parent1', 'parent2')
+        repository_path = os.path.join(parent_path, 'repository')
+        repository_location = self.prefix + repository_path
+        with pytest.raises(Repository.ParentPathDoesNotExist):
+            # normal borg init does NOT create missing parent dirs
+            self.cmd('init', '--encryption=none', repository_location)
+        # but if told so, it does:
+        self.cmd('init', '--encryption=none', '--make-parent-dirs', repository_location)
+        assert os.path.exists(parent_path)
+
     def test_unix_socket(self):
         self.cmd('init', '--encryption=repokey', self.repository_location)
         try:
@@ -782,21 +794,28 @@ class ArchiverTestCase(ArchiverTestCaseBase):
     def test_mount_hardlinks(self):
         self._extract_hardlinks_setup()
         mountpoint = os.path.join(self.tmpdir, 'mountpoint')
-        with self.fuse_mount(self.repository_location + '::test', mountpoint, '--strip-components=2'), \
+        # we need to get rid of permissions checking because fakeroot causes issues with it.
+        # On all platforms, borg defaults to "default_permissions" and we need to get rid of it via "ignore_permissions".
+        # On macOS (darwin), we additionally need "defer_permissions" to switch off the checks in osxfuse.
+        if sys.platform == 'darwin':
+            ignore_perms = ['-o', 'ignore_permissions,defer_permissions']
+        else:
+            ignore_perms = ['-o', 'ignore_permissions']
+        with self.fuse_mount(self.repository_location + '::test', mountpoint, '--strip-components=2', *ignore_perms), \
              changedir(mountpoint):
             assert os.stat('hardlink').st_nlink == 2
             assert os.stat('subdir/hardlink').st_nlink == 2
             assert open('subdir/hardlink', 'rb').read() == b'123456'
             assert os.stat('aaaa').st_nlink == 2
             assert os.stat('source2').st_nlink == 2
-        with self.fuse_mount(self.repository_location + '::test', mountpoint, 'input/dir1'), \
+        with self.fuse_mount(self.repository_location + '::test', mountpoint, 'input/dir1', *ignore_perms), \
              changedir(mountpoint):
             assert os.stat('input/dir1/hardlink').st_nlink == 2
             assert os.stat('input/dir1/subdir/hardlink').st_nlink == 2
             assert open('input/dir1/subdir/hardlink', 'rb').read() == b'123456'
             assert os.stat('input/dir1/aaaa').st_nlink == 2
             assert os.stat('input/dir1/source2').st_nlink == 2
-        with self.fuse_mount(self.repository_location + '::test', mountpoint), \
+        with self.fuse_mount(self.repository_location + '::test', mountpoint, *ignore_perms), \
              changedir(mountpoint):
             assert os.stat('input/source').st_nlink == 4
             assert os.stat('input/abba').st_nlink == 4
@@ -1761,6 +1780,39 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         output = self.cmd('create', '--list', '--filter=AM', self.repository_location + '::test3', 'input')
         self.assert_in('file1', output)
 
+    @pytest.mark.skipif(not are_fifos_supported(), reason='FIFOs not supported')
+    def test_create_read_special_symlink(self):
+        from threading import Thread
+
+        def fifo_feeder(fifo_fn, data):
+            fd = os.open(fifo_fn, os.O_WRONLY)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+
+        self.cmd('init', '--encryption=repokey', self.repository_location)
+        archive = self.repository_location + '::test'
+        data = b'foobar' * 1000
+
+        fifo_fn = os.path.join(self.input_path, 'fifo')
+        link_fn = os.path.join(self.input_path, 'link_fifo')
+        os.mkfifo(fifo_fn)
+        os.symlink(fifo_fn, link_fn)
+
+        t = Thread(target=fifo_feeder, args=(fifo_fn, data))
+        t.start()
+        try:
+            self.cmd('create', '--read-special', archive, 'input/link_fifo')
+        finally:
+            t.join()
+        with changedir('output'):
+            self.cmd('extract', archive)
+            fifo_fn = 'input/link_fifo'
+            with open(fifo_fn, 'rb') as f:
+                extracted_data = f.read()
+        assert extracted_data == data
+
     def test_create_read_special_broken_symlink(self):
         os.symlink('somewhere doesnt exist', os.path.join(self.input_path, 'link'))
         self.cmd('init', '--encryption=repokey', self.repository_location)
@@ -2188,7 +2240,7 @@ class ArchiverTestCase(ArchiverTestCaseBase):
                     else:
                         assert False, "expected OSError(ENOATTR), but no error was raised"
             except OSError as err:
-                if sys.platform.startswith(('freebsd', )) and err.errno == errno.ENOTSUP:
+                if sys.platform.startswith(('nothing_here_now', )) and err.errno == errno.ENOTSUP:
                     # some systems have no xattr support on FUSE
                     pass
                 else:
@@ -2621,6 +2673,14 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         assert export_contents.startswith('<!doctype html>')
         assert export_contents.endswith('</html>')
 
+    def test_key_export_directory(self):
+        export_directory = self.output_path + '/exported'
+        os.mkdir(export_directory)
+
+        self.cmd('init', self.repository_location, '--encryption', 'repokey')
+
+        self.cmd('key', 'export', self.repository_location, export_directory, exit_code=EXIT_ERROR)
+
     def test_key_import_errors(self):
         export_file = self.output_path + '/exported'
         self.cmd('init', self.repository_location, '--encryption', 'keyfile')
@@ -2793,6 +2853,8 @@ id: 2 / e29442 3506da 4e1ea7 / 25f62a 5a3d41 - 02
             self.cmd('config', '--delete', self.repository_location, cfg_key)
             self.cmd('config', self.repository_location, cfg_key, exit_code=1)
         self.cmd('config', '--list', '--delete', self.repository_location, exit_code=2)
+        self.cmd('config', self.repository_location, exit_code=2)
+        self.cmd('config', self.repository_location, 'invalid-option', exit_code=1)
 
     requires_gnutar = pytest.mark.skipif(not have_gnutar(), reason='GNU tar must be installed for this test.')
     requires_gzip = pytest.mark.skipif(not shutil.which('gzip'), reason='gzip must be installed for this test.')
@@ -2855,7 +2917,7 @@ id: 2 / e29442 3506da 4e1ea7 / 25f62a 5a3d41 - 02
 
     @requires_hardlinks
     @requires_gnutar
-    def test_extract_hardlinks(self):
+    def test_extract_hardlinks_tar(self):
         self._extract_hardlinks_setup()
         self.cmd('export-tar', self.repository_location + '::test', 'output.tar', 'input/dir1')
         with changedir('output'):
@@ -2890,6 +2952,10 @@ id: 2 / e29442 3506da 4e1ea7 / 25f62a 5a3d41 - 02
 class ArchiverTestCaseBinary(ArchiverTestCase):
     EXE = 'borg.exe'
     FORK_DEFAULT = True
+
+    @unittest.skip('does not raise Exception, but sets rc==2')
+    def test_init_parent_dirs(self):
+        pass
 
     @unittest.skip('patches objects')
     def test_init_interrupt(self):
@@ -3574,7 +3640,7 @@ def test_get_args():
     # were not forced, environment variables would be interpreted by the shell, but this does not
     # happen for forced commands - we get the verbatim command line and need to deal with env vars.
     args = archiver.get_args(['borg', 'serve', ],
-                             'BORG_HOSTNAME_IS_UNIQUE=yes borg serve --info')
+                             'BORG_FOO=bar borg serve --info')
     assert args.func == archiver.do_serve
 
 
